@@ -11,9 +11,10 @@
   - [Attestation](#attestation)
   - [Sync Committee participations](#sync-committee-participations)
   - [Block proposal](#block-proposal)
-    - [Constructing the new `signed_execution_payload_header` field in `BeaconBlockBody`](#constructing-the-new-signed_execution_payload_header-field-in-beaconblockbody)
+    - [Constructing the new `parent_execution_payload_header` field in `BeaconBlockBody`](#constructing-the-new-parent_execution_payload_header-field-in-beaconblockbody)
     - [Constructing the new `payload_attestations` field in `BeaconBlockBody`](#constructing-the-new-payload_attestations-field-in-beaconblockbody)
     - [Blob sidecars](#blob-sidecars)
+    - [Constructing the execution payload envelope](#constructing-the-execution-payload-envelope)
   - [Payload timeliness attestation](#payload-timeliness-attestation)
     - [Constructing a payload attestation](#constructing-a-payload-attestation)
 - [Modified functions](#modified-functions)
@@ -65,8 +66,6 @@ future assignments by noting their assigned PTC slot.
 
 All validator responsibilities remain unchanged other than the following:
 
-- Proposers are no longer required to broadcast `BlobSidecar` objects, as this
-  becomes a builder's duty.
 - Some validators are selected per slot to become PTC members, these validators
   must broadcast `PayloadAttestationMessage` objects during the assigned slot
   before the deadline of `3 * SECONDS_PER_SLOT // INTERVALS_PER_SLOT` seconds
@@ -101,23 +100,15 @@ any slot during which `is_proposer(state, validator_index)` returns `true`. The
 mechanism to prepare this beacon block and related sidecars differs from
 previous forks as follows
 
-#### Constructing the new `signed_execution_payload_header` field in `BeaconBlockBody`
+#### Constructing the new `parent_execution_payload_header` field in `BeaconBlockBody`
 
-To obtain `signed_execution_payload_header`, a block proposer building a block
-on top of a `state` must take the following actions:
+To construct `parent_execution_payload_header`, a block proposer building a
+block on top of a `state` must:
 
-- Listen to the `execution_payload_header` gossip global topic and save an
-  accepted `signed_execution_payload_header` from a builder. Proposer MAY obtain
-  these signed messages by other off-protocol means.
-- The `signed_execution_payload_header` must satisfy the verification conditions
-  found in `process_execution_payload_header`, that is
-  - The header signature must be valid
-  - The builder balance can cover the header value
-  - The header slot is for the proposal block slot
-  - The header parent block hash equals the state's `latest_block_hash`.
-  - The header parent block root equals the current block's `parent_root`.
-- Select one bid and set
-  `body.signed_execution_payload_header = signed_execution_payload_header`
+- Set
+  `body.parent_execution_payload_header = state.latest_execution_payload_header`
+
+This field contains the execution payload header from the parent beacon block.
 
 #### Constructing the new `payload_attestations` field in `BeaconBlockBody`
 
@@ -139,10 +130,64 @@ in the block. The validator will have to
 
 #### Blob sidecars
 
-The blob sidecars are no longer broadcast by the validator, and thus their
-construction is not necessary. This deprecates the corresponding sections from
-the honest validator guide in the Electra fork, moving them, albeit with some
-modifications, to the [honest Builder guide](./builder.md)
+*[Modified in EIP7732]*
+
+The `BlobSidecar` container is modified to reference
+`SignedExecutionPayloadEnvelope` instead of `SignedBeaconBlockHeader`. The
+function `get_blob_sidecars` is modified to create blob sidecars that reference
+the execution payload envelope where the KZG commitments are stored.
+
+```python
+def get_blob_sidecars(
+    signed_execution_payload_envelope: SignedExecutionPayloadEnvelope,
+    blobs: Sequence[Blob],
+    blob_kzg_proofs: Sequence[KZGProof],
+) -> Sequence[BlobSidecar]:
+    envelope = signed_execution_payload_envelope.message
+    blob_kzg_commitments = envelope.blob_kzg_commitments
+    sidecars: List[BlobSidecar] = []
+    for index, blob in enumerate(blobs):
+        proof = compute_merkle_proof(
+            envelope,
+            get_generalized_index(ExecutionPayloadEnvelope, "blob_kzg_commitments", index),
+        )
+        sidecars.append(
+            BlobSidecar(
+                index=index,
+                blob=blob,
+                kzg_commitment=blob_kzg_commitments[index],
+                kzg_proof=blob_kzg_proofs[index],
+                signed_execution_payload_envelope=signed_execution_payload_envelope,
+                kzg_commitment_inclusion_proof=proof,
+            )
+        )
+    return sidecars
+```
+
+#### Constructing the execution payload envelope
+
+Proposers are responsible for creating and broadcasting
+`SignedExecutionPayloadEnvelope` objects that contain the execution payload,
+blob commitments, and other execution data.
+
+To construct the `execution_payload_envelope` the proposer must perform the
+following steps. We alias `block` to be the corresponding beacon block.
+
+1. Set the `payload` field to be the `ExecutionPayload` obtained from the
+   execution engine.
+2. Set the `execution_requests` field to be the `ExecutionRequests` associated
+   with `payload`.
+3. Set the `proposer_index` field to be the validator index of the proposer.
+4. Set `beacon_block_root` to be `hash_tree_root(block)`.
+5. Set `slot` to be `block.slot`.
+6. Set `blob_kzg_commitments` to be the KZG commitments for any blobs associated
+   with this slot.
+7. Run `process_execution_payload(state, signed_envelope, verify=False)` to
+   compute the post-state.
+8. Set `state_root` to `hash_tree_root(state)` after payload processing.
+
+After preparing the `envelope`, the proposer should sign it and broadcast the
+`SignedExecutionPayloadEnvelope` on the `execution_payload` global gossip topic.
 
 ### Payload timeliness attestation
 

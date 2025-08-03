@@ -226,9 +226,12 @@ def is_payload_timely(store: Store, beacon_block_root: Root) -> bool:
 ```python
 def get_parent_payload_status(store: Store, block: BeaconBlock) -> PayloadStatus:
     parent = store.blocks[block.parent_root]
-    parent_block_hash = block.body.signed_execution_payload_header.message.parent_block_hash
-    message_block_hash = parent.body.signed_execution_payload_header.message.block_hash
-    return PAYLOAD_STATUS_FULL if parent_block_hash == message_block_hash else PAYLOAD_STATUS_EMPTY
+    parent_execution_payload_hash = block.body.parent_execution_payload_header.block_hash
+    grand_parent_execution_payload_hash = parent.body.parent_execution_payload_header.block_hash
+    if parent_execution_payload_hash == grand_parent_execution_payload_hash:
+        return PAYLOAD_STATUS_EMPTY
+    else:
+        return PAYLOAD_STATUS_FULL
 ```
 
 ### New `is_parent_node_full`
@@ -460,8 +463,8 @@ def on_block(store: Store, signed_block: SignedBeaconBlock) -> None:
 
     # Check if this blocks builds on empty or full parent block
     parent_block = store.blocks[block.parent_root]
-    header = block.body.signed_execution_payload_header.message
-    parent_header = parent_block.body.signed_execution_payload_header.message
+    header = block.body.parent_execution_payload_header
+    parent_header = parent_block.body.parent_execution_payload_header
     # Make a copy of the state to avoid mutability issues
     if is_parent_node_full(store, block):
         assert block.parent_root in store.execution_payload_states
@@ -642,13 +645,10 @@ def validate_merge_block(block: BeaconBlock) -> None:
     if TERMINAL_BLOCK_HASH != Hash32():
         # If `TERMINAL_BLOCK_HASH` is used as an override, the activation epoch must be reached.
         assert compute_epoch_at_slot(block.slot) >= TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH
-        assert (
-            block.body.signed_execution_payload_header.message.parent_block_hash
-            == TERMINAL_BLOCK_HASH
-        )
+        assert block.body.parent_execution_payload_header.block_hash == TERMINAL_BLOCK_HASH
         return
 
-    pow_block = get_pow_block(block.body.signed_execution_payload_header.message.parent_block_hash)
+    pow_block = get_pow_block(block.body.parent_execution_payload_header.block_hash)
     # Check if `pow_block` is available
     assert pow_block is not None
     pow_parent = get_pow_block(pow_block.parent_hash)
