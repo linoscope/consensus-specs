@@ -7,12 +7,9 @@
 - [Introduction](#introduction)
 - [Constants](#constants)
   - [Domain types](#domain-types)
-  - [Misc](#misc)
 - [Preset](#preset)
-  - [Misc](#misc-1)
+  - [Misc](#misc)
   - [Max operations per block](#max-operations-per-block)
-  - [State list lengths](#state-list-lengths)
-  - [Withdrawal prefixes](#withdrawal-prefixes)
 - [Containers](#containers)
   - [New containers](#new-containers)
     - [`PayloadAttestationData`](#payloadattestationdata)
@@ -27,10 +24,9 @@
 - [Helper functions](#helper-functions)
   - [Math](#math)
     - [New `bit_floor`](#new-bit_floor)
-  - [Misc](#misc-2)
+  - [Misc](#misc-1)
     - [New `remove_flag`](#new-remove_flag)
   - [Predicates](#predicates)
-    - [Modified `has_compounding_withdrawal_credential`](#modified-has_compounding_withdrawal_credential)
     - [New `is_attestation_same_slot`](#new-is_attestation_same_slot)
     - [New `is_valid_indexed_payload_attestation`](#new-is_valid_indexed_payload_attestation)
     - [New `is_parent_block_full`](#new-is_parent_block_full)
@@ -43,6 +39,7 @@
   - [Modified `process_slot`](#modified-process_slot)
   - [Epoch processing](#epoch-processing)
   - [Block processing](#block-processing)
+    - [Modified `process_withdrawals`](#modified-process_withdrawals)
     - [Operations](#operations)
       - [Modified `process_operations`](#modified-process_operations)
       - [Attestations](#attestations)
@@ -64,12 +61,13 @@ This is the beacon chain specification for separating the execution payload from
 *Note*: This specification is built upon
 [Electra](../../electra/beacon-chain.md) and is under active development.
 
-This feature implements a simplified execution-consensus separation through pipelining.
-The slot is divided in **four** intervals. Proposers submit beacon blocks containing
-`parent_execution_payload_header` at the beginning of the slot, and later broadcast
-execution payload envelopes containing the actual execution data. Validators selected
-to be members of the new **Payload Timeliness Committee** (PTC) attest to the presence
-and timeliness of execution payloads.
+This feature implements a simplified execution-consensus separation through
+pipelining. The slot is divided in **four** intervals. Proposers submit beacon
+blocks containing `parent_execution_payload_header` at the beginning of the
+slot, and later broadcast execution payload envelopes containing the actual
+execution data. Validators selected to be members of the new **Payload
+Timeliness Committee** (PTC) attest to the presence and timeliness of execution
+payloads.
 
 At any given slot, the status of the blockchain's head may be either
 
@@ -88,7 +86,6 @@ At any given slot, the status of the blockchain's head may be either
 | --------------------- | -------------------------- |
 | `DOMAIN_PTC_ATTESTER` | `DomainType('0x0C000000')` |
 
-
 ## Preset
 
 ### Misc
@@ -102,8 +99,6 @@ At any given slot, the status of the blockchain's head may be either
 | Name                       | Value |
 | -------------------------- | ----- |
 | `MAX_PAYLOAD_ATTESTATIONS` | `4`   |
-
-
 
 ## Containers
 
@@ -204,11 +199,11 @@ class BeaconBlockBody(Container):
 
 *Note*: The `BeaconState` is modified to track the last withdrawals honored in
 the CL. The `latest_execution_payload_header` is modified semantically to refer
-to the header of the most recent execution payload that was successfully committed.
-In the pipelining design, this header may be from a previous slot until the current
-slot's execution payload envelope is processed. Another addition is to track the last committed
-block hash and the last slot that was full, that is in which there were both
-consensus and execution blocks included.
+to the header of the most recent execution payload that was successfully
+committed. In the pipelining design, this header may be from a previous slot
+until the current slot's execution payload envelope is processed. Another
+addition is to track the last committed block hash and the last slot that was
+full, that is in which there were both consensus and execution blocks included.
 
 ```python
 class BeaconState(Container):
@@ -287,8 +282,6 @@ def remove_flag(flags: ParticipationFlags, flag_index: int) -> ParticipationFlag
 
 ### Predicates
 
-
-
 #### New `is_attestation_same_slot`
 
 ```python
@@ -304,7 +297,6 @@ def is_attestation_same_slot(state: BeaconState, data: AttestationData) -> bool:
     )
     return is_matching_blockroot and is_current_blockroot
 ```
-
 
 #### New `is_valid_indexed_payload_attestation`
 
@@ -478,7 +470,6 @@ def process_slot(state: BeaconState) -> None:
 
 ### Epoch processing
 
-
 ### Block processing
 
 *Note*: The function `process_block` is modified to call the new and updated
@@ -500,7 +491,11 @@ def process_block(state: BeaconState, block: BeaconBlock) -> None:
 
 #### Modified `process_withdrawals`
 
-*Note*: This is modified to take only the state as parameter. Withdrawals are deterministic given the beacon state, any execution payload that has the corresponding block as parent beacon block is required to honor these withdrawals in the execution layer. This function must be called before `process_execution_payload` as this latter function affects validator balances.
+*Note*: This is modified to take only the state as parameter. Withdrawals are
+deterministic given the beacon state, any execution payload that has the
+corresponding block as parent beacon block is required to honor these
+withdrawals in the execution layer. This function must be called before
+`process_execution_payload` as this latter function affects validator balances.
 
 ```python
 def process_withdrawals(state: BeaconState) -> None:
@@ -508,9 +503,7 @@ def process_withdrawals(state: BeaconState) -> None:
     if not is_parent_block_full(state):
         return
 
-    withdrawals, processed_partial_withdrawals_count = (
-        get_expected_withdrawals(state)
-    )
+    withdrawals, processed_partial_withdrawals_count = get_expected_withdrawals(state)
     withdrawals_list = List[Withdrawal, MAX_WITHDRAWALS_PER_PAYLOAD](withdrawals)
     state.latest_withdrawals_root = hash_tree_root(withdrawals_list)
     for withdrawal in withdrawals:
@@ -580,8 +573,8 @@ def process_operations(state: BeaconState, body: BeaconBlockBody) -> None:
 
 ###### Modified `process_attestation`
 
-*Note*: The function is modified to use the `index` field in the `AttestationData` 
-to signal the payload availability.
+*Note*: The function is modified to use the `index` field in the
+`AttestationData` to signal the payload availability.
 
 ```python
 def process_attestation(state: BeaconState, attestation: Attestation) -> None:

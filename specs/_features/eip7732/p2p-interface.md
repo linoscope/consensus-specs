@@ -61,8 +61,7 @@ specifications of previous upgrades, and assumes them as pre-requisite.
 #### `BlobSidecar`
 
 The `BlobSidecar` container is modified to contain a
-`SignedExecutionPayloadEnvelope` instead of a
-`SignedBeaconBlockHeader`.
+`SignedExecutionPayloadEnvelope` instead of a `SignedBeaconBlockHeader`.
 
 ```python
 class BlobSidecar(Container):
