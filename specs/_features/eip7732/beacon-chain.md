@@ -20,6 +20,7 @@
     - [`SignedExecutionPayloadEnvelope`](#signedexecutionpayloadenvelope)
   - [Modified containers](#modified-containers)
     - [`BeaconBlockBody`](#beaconblockbody)
+    - [`ExecutionPayloadHeader`](#executionpayloadheader)
     - [`BeaconState`](#beaconstate)
 - [Helper functions](#helper-functions)
   - [Math](#math)
@@ -56,7 +57,8 @@
 
 ## Introduction
 
-This is the beacon chain specification for separating the execution payload from the beacon block.
+This is the beacon chain specification for separating the execution payload from
+the beacon block.
 
 *Note*: This specification is built upon
 [Electra](../../electra/beacon-chain.md) and is under active development.
@@ -195,15 +197,35 @@ class BeaconBlockBody(Container):
     payload_attestations: List[PayloadAttestation, MAX_PAYLOAD_ATTESTATIONS]
 ```
 
+#### `ExecutionPayloadHeader`
+
+*Note*: The `ExecutionPayloadHeader` is modified to only contain the block hash
+of the committed `ExecutionPayload` in addition to the builder's payment
+information, gas limit and KZG commitments root to verify the inclusion proofs.
+
+```python
+class ExecutionPayloadHeader(Container):
+    parent_block_hash: Hash32
+    parent_block_root: Root
+    block_hash: Hash32
+    fee_recipient: ExecutionAddress
+    gas_limit: uint64
+    builder_index: ValidatorIndex
+    slot: Slot
+    value: Gwei
+    blob_kzg_commitments_root: Root
+```
+
 #### `BeaconState`
 
 *Note*: The `BeaconState` is modified to track the last withdrawals honored in
 the CL. The `latest_execution_payload_header` is modified semantically to refer
-to the header of the most recent execution payload that was successfully
-committed. In the pipelining design, this header may be from a previous slot
-until the current slot's execution payload envelope is processed. Another
-addition is to track the last committed block hash and the last slot that was
-full, that is in which there were both consensus and execution blocks included.
+to the header of the most recent execution payload envelope that was processed,
+regardless of execution success or failure. This header contains only
+pre-execution fields and represents the commitment made, not the execution
+results. Another addition is to track the last committed block hash and the last
+slot that was full, that is in which there were both consensus and execution
+blocks included.
 
 ```python
 class BeaconState(Container):
@@ -753,6 +775,21 @@ def process_execution_payload(
     assert payload.timestamp == compute_time_at_slot(state, state.slot)
     # Verify commitments are under limit
     assert len(envelope.blob_kzg_commitments) <= MAX_BLOBS_PER_BLOCK
+
+    # Update latest execution payload header BEFORE execution validation
+    # This ensures it's set even if execution fails, using only pre-execution fields
+    state.latest_execution_payload_header = ExecutionPayloadHeader(
+        parent_block_hash=payload.parent_hash,
+        parent_block_root=state.latest_block_header.parent_root,
+        block_hash=payload.block_hash,
+        fee_recipient=payload.fee_recipient,
+        gas_limit=payload.gas_limit,
+        builder_index=envelope.proposer_index,  # Using proposer as builder in this simplified version
+        slot=envelope.slot,
+        value=Gwei(0),  # No payment mechanism in this simplified version
+        blob_kzg_commitments_root=hash_tree_root(envelope.blob_kzg_commitments),
+    )
+
     # Verify the execution payload is valid
     versioned_hashes = [
         kzg_commitment_to_versioned_hash(commitment) for commitment in envelope.blob_kzg_commitments
@@ -779,27 +816,6 @@ def process_execution_payload(
     state.execution_payload_availability[state.slot % SLOTS_PER_HISTORICAL_ROOT] = 0b1
     state.latest_block_hash = payload.block_hash
     state.latest_full_slot = state.slot
-    
-    # Update latest execution payload header
-    state.latest_execution_payload_header = ExecutionPayloadHeader(
-        parent_hash=payload.parent_hash,
-        fee_recipient=payload.fee_recipient,
-        state_root=payload.state_root,
-        receipts_root=payload.receipts_root,
-        logs_bloom=payload.logs_bloom,
-        prev_randao=payload.prev_randao,
-        block_number=payload.block_number,
-        gas_limit=payload.gas_limit,
-        gas_used=payload.gas_used,
-        timestamp=payload.timestamp,
-        extra_data=payload.extra_data,
-        base_fee_per_gas=payload.base_fee_per_gas,
-        block_hash=payload.block_hash,
-        transactions_root=hash_tree_root(payload.transactions),
-        withdrawals_root=hash_tree_root(payload.withdrawals),
-        blob_gas_used=payload.blob_gas_used,
-        excess_blob_gas=payload.excess_blob_gas,
-    )
 
     # Verify the state root
     if verify:
