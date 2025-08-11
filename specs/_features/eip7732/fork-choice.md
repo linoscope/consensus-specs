@@ -470,7 +470,7 @@ def on_block(store: Store, signed_block: SignedBeaconBlock) -> None:
         assert block.parent_root in store.execution_payload_states
         state = copy(store.execution_payload_states[block.parent_root])
     else:
-        assert header.parent_block_hash == parent_header.parent_block_hash
+        assert header.parent_hash == parent_header.parent_hash
         state = copy(store.block_states[block.parent_root])
 
     # Blocks cannot be in the future. If they are, their consideration must be delayed until they are in the past.

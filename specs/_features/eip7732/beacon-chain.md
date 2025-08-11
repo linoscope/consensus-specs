@@ -779,6 +779,27 @@ def process_execution_payload(
     state.execution_payload_availability[state.slot % SLOTS_PER_HISTORICAL_ROOT] = 0b1
     state.latest_block_hash = payload.block_hash
     state.latest_full_slot = state.slot
+    
+    # Update latest execution payload header
+    state.latest_execution_payload_header = ExecutionPayloadHeader(
+        parent_hash=payload.parent_hash,
+        fee_recipient=payload.fee_recipient,
+        state_root=payload.state_root,
+        receipts_root=payload.receipts_root,
+        logs_bloom=payload.logs_bloom,
+        prev_randao=payload.prev_randao,
+        block_number=payload.block_number,
+        gas_limit=payload.gas_limit,
+        gas_used=payload.gas_used,
+        timestamp=payload.timestamp,
+        extra_data=payload.extra_data,
+        base_fee_per_gas=payload.base_fee_per_gas,
+        block_hash=payload.block_hash,
+        transactions_root=hash_tree_root(payload.transactions),
+        withdrawals_root=hash_tree_root(payload.withdrawals),
+        blob_gas_used=payload.blob_gas_used,
+        excess_blob_gas=payload.excess_blob_gas,
+    )
 
     # Verify the state root
     if verify:
