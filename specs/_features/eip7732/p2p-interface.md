@@ -19,7 +19,6 @@
         - [`beacon_block`](#beacon_block)
         - [`execution_payload`](#execution_payload)
         - [`payload_attestation_message`](#payload_attestation_message)
-        - [`execution_payload_header`](#execution_payload_header)
       - [Attestation subnets](#attestation-subnets)
         - [`beacon_attestation_{subnet_id}`](#beacon_attestation_subnet_id)
   - [The Req/Resp domain](#the-reqresp-domain)
@@ -61,8 +60,8 @@ specifications of previous upgrades, and assumes them as pre-requisite.
 
 #### `BlobSidecar`
 
-The `BlobSidecar` container is modified indirectly because the constant
-`KZG_COMMITMENT_INCLUSION_PROOF_DEPTH` is modified.
+The `BlobSidecar` container is modified to contain a
+`SignedExecutionPayloadEnvelope` instead of a `SignedBeaconBlockHeader`.
 
 ```python
 class BlobSidecar(Container):
@@ -70,7 +69,7 @@ class BlobSidecar(Container):
     blob: Blob
     kzg_commitment: KZGCommitment
     kzg_proof: KZGProof
-    signed_block_header: SignedBeaconBlockHeader
+    signed_execution_payload_envelope: SignedExecutionPayloadEnvelope
     kzg_commitment_inclusion_proof: Vector[Bytes32, KZG_COMMITMENT_INCLUSION_PROOF_DEPTH_EIP7732]
 ```
 
@@ -78,9 +77,8 @@ class BlobSidecar(Container):
 
 ##### Modified `verify_blob_sidecar_inclusion_proof`
 
-`verify_blob_sidecar_inclusion_proof` is modified in EIP-7732 to account for the
-fact that the KZG commitments are included in the `ExecutionPayloadEnvelope` and
-no longer in the beacon block body.
+`verify_blob_sidecar_inclusion_proof` is modified in EIP-7732 to validate
+against the KZG commitments list in the `ExecutionPayloadEnvelope`.
 
 ```python
 def verify_blob_sidecar_inclusion_proof(blob_sidecar: BlobSidecar) -> bool:
@@ -88,10 +86,8 @@ def verify_blob_sidecar_inclusion_proof(blob_sidecar: BlobSidecar) -> bool:
         List[KZGCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK], blob_sidecar.index
     )
     outer_gindex = get_generalized_index(
-        BeaconBlockBody,
-        "signed_execution_payload_header",
-        "message",
-        "blob_kzg_commitments_root",
+        ExecutionPayloadEnvelope,
+        "blob_kzg_commitments",
     )
     gindex = get_subtree_index(concat_generalized_indices(outer_gindex, inner_gindex))
 
@@ -100,7 +96,7 @@ def verify_blob_sidecar_inclusion_proof(blob_sidecar: BlobSidecar) -> bool:
         branch=blob_sidecar.kzg_commitment_inclusion_proof,
         depth=KZG_COMMITMENT_INCLUSION_PROOF_DEPTH_EIP7732,
         index=gindex,
-        root=blob_sidecar.signed_block_header.message.body_root,
+        root=blob_sidecar.signed_execution_payload_envelope.message.hash_tree_root(),
     )
 ```
 
@@ -124,7 +120,6 @@ are given in this table:
 
 | Name                          | Message Type                     |
 | ----------------------------- | -------------------------------- |
-| `execution_payload_header`    | `SignedExecutionPayloadHeader`   |
 | `execution_payload`           | `SignedExecutionPayloadEnvelope` |
 | `payload_attestation_message` | `PayloadAttestationMessage`      |
 
@@ -176,12 +171,12 @@ regards to the `ExecutionPayload` are removed:
   validation.
 
 And instead the following validations are set in place with the alias
-`header = signed_execution_payload_header.message`:
+`parent_header = block.body.parent_execution_payload_header`:
 
 - If `execution_payload` verification of block's execution payload parent by an
   execution node **is complete**:
   - [REJECT] The block's execution payload parent (defined by
-    `header.parent_block_hash`) passes all validation.
+    `parent_header.block_hash`) passes all validation.
 - [REJECT] The block's parent (defined by `block.parent_root`) passes
   validation.
 
@@ -193,24 +188,21 @@ This topic is used to propagate execution payload messages as
 The following validations MUST pass before forwarding the
 `signed_execution_payload_envelope` on the network, assuming the alias
 `envelope = signed_execution_payload_envelope.message`,
-`payload = payload_envelope.payload`:
+`payload = envelope.payload`:
 
-- _[IGNORE]_ The envelope's block root `envelope.block_root` has been seen (via
-  gossip or non-gossip sources) (a client MAY queue payload for processing once
-  the block is retrieved).
+- _[IGNORE]_ The envelope's block root `envelope.beacon_block_root` has been
+  seen (via gossip or non-gossip sources) (a client MAY queue payload for
+  processing once the block is retrieved).
 - _[IGNORE]_ The node has not seen another valid
-  `SignedExecutionPayloadEnvelope` for this block root from this builder.
+  `SignedExecutionPayloadEnvelope` for this block root from this proposer.
 
-Let `block` be the block with `envelope.beacon_block_root`. Let `header` alias
-`block.body.signed_execution_payload_header.message` (notice that this can be
-obtained from the `state.signed_execution_payload_header`)
+Let `block` be the block with `envelope.beacon_block_root`.
 
 - _[REJECT]_ `block` passes validation.
 - _[REJECT]_ `block.slot` equals `envelope.slot`.
-- _[REJECT]_ `envelope.builder_index == header.builder_index`
-- _[REJECT]_ `payload.block_hash == header.block_hash`
+- _[REJECT]_ `envelope.proposer_index == block.proposer_index`
 - _[REJECT]_ `signed_execution_payload_envelope.signature` is valid with respect
-  to the builder's public key.
+  to the proposer's public key.
 
 ###### `payload_attestation_message`
 
@@ -235,35 +227,6 @@ The following validations MUST pass before forwarding the
   processing the block up to the current slot as determined by the fork choice.
 - _[REJECT]_ `payload_attestation_message.signature` is valid with respect to
   the validator's public key.
-
-###### `execution_payload_header`
-
-This topic is used to propagate signed bids as `SignedExecutionPayloadHeader`.
-
-The following validations MUST pass before forwarding the
-`signed_execution_payload_header` on the network, assuming the alias
-`header = signed_execution_payload_header.message`:
-
-- _[REJECT]_ `header.builder_index` is a valid, active, and non-slashed builder
-  index.
-- _[REJECT]_ the builder's withdrawal credentials' prefix is
-  `BUILDER_WITHDRAWAL_PREFIX` -- i.e.
-  `is_builder_withdrawal_credential(state.validators[header.builder_index].withdrawal_credentials)`
-  returns `True`.
-- _[IGNORE]_ this is the first signed bid seen with a valid signature from the
-  given builder for this slot.
-- _[IGNORE]_ this bid is the highest value bid seen for the corresponding slot
-  and the given parent block hash.
-- _[IGNORE]_ `header.value` is less or equal than the builder's excess balance
-  -- i.e.
-  `MIN_ACTIVATION_BALANCE + header.value <= state.balances[header.builder_index]`.
-- _[IGNORE]_ `header.parent_block_hash` is the block hash of a known execution
-  payload in fork choice.
-- _[IGNORE]_ `header.parent_block_root` is the hash tree root of a known beacon
-  block in fork choice.
-- _[IGNORE]_ `header.slot` is the current slot or the next slot.
-- _[REJECT]_ `signed_execution_payload_header.signature` is valid with respect
-  to the `header.builder_index`.
 
 ##### Attestation subnets
 
